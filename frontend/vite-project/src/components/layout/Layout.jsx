@@ -1,57 +1,45 @@
-import { Outlet } from 'react-router-dom';
-import { useState, useEffect } from 'react';
-import { Sidebar } from './Sidebar';
-import { Navbar } from './Navbar';
-import { IncidentAlertModal } from '../common/IncidentAlertModal';
+import { Outlet } from "react-router-dom";
+import { useState } from "react";
 
-export const Layout = () => {
-  const [isMobile, setIsMobile] = useState(() => typeof window !== 'undefined' && window.innerWidth < 768);
-  const [sidebarCollapsed, setSidebarCollapsed] = useState(() => {
-    if (typeof window !== 'undefined' && window.innerWidth < 768) return true;
-    return localStorage.getItem('sidebar_collapsed') === 'true';
-  });
+import { Sidebar } from "./Sidebar";
+import { Navbar } from "./Navbar";
 
-  useEffect(() => {
-    const handleResize = () => {
-      const mobile = window.innerWidth < 768;
-      setIsMobile(mobile);
-      if (mobile) {
-        setSidebarCollapsed(true);
-      }
-    };
-    window.addEventListener('resize', handleResize);
-    return () => window.removeEventListener('resize', handleResize);
-  }, []);
-
-  const toggleSidebar = () => {
-    setSidebarCollapsed(prev => {
-      const next = !prev;
-      if (!isMobile) localStorage.setItem('sidebar_collapsed', String(next));
-      return next;
-    });
-  };
-
-  const closeSidebarMobile = () => {
-    if (isMobile) setSidebarCollapsed(true);
-  };
+export function Layout() {
+  const [sidebarOpen, setSidebarOpen] =
+    useState(true);
 
   return (
-    <div className="app-container">
-      {isMobile && !sidebarCollapsed && (
-        <div className="sidebar-backdrop" onClick={closeSidebarMobile} />
-      )}
+    <div className="app-shell">
       <Sidebar
-        collapsed={sidebarCollapsed}
-        isMobile={isMobile}
-        onClose={closeSidebarMobile}
+        open={sidebarOpen}
+        onNavigate={() =>
+          setSidebarOpen(false)
+        }
       />
-      <main className={`main-content ${sidebarCollapsed ? 'sidebar-collapsed' : ''}`}>
-        <Navbar onToggleSidebar={toggleSidebar} sidebarCollapsed={sidebarCollapsed} />
-        <div className="page-content">
+
+      <div className="app-main">
+        <Navbar
+          onMenuClick={() =>
+            setSidebarOpen(
+              (value) => !value
+            )
+          }
+        />
+
+        <main className="page-content">
           <Outlet />
-        </div>
-      </main>
-      <IncidentAlertModal />
+        </main>
+      </div>
+
+      {sidebarOpen && (
+        <button
+          className="mobile-overlay"
+          onClick={() =>
+            setSidebarOpen(false)
+          }
+          aria-label="Close navigation"
+        />
+      )}
     </div>
   );
-};
+}

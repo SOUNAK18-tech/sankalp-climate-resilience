@@ -1,632 +1,605 @@
-import React, { useState, useEffect, useRef } from 'react';
-import { Link } from 'react-router-dom';
-import { dashboardKPIs, vehicles, roads, incidents } from '../data/mockData';
-import { api, alertsAPI, deliveriesAPI } from '../services/api';
-import { Badge } from '../components/common/Badge';
-import { MapPanel } from '../components/map/MapPanel';
-import { useUserLocation } from '../hooks/useUserLocation';
-import { Truck, Clock, AlertTriangle, Activity, Bell, MapPin, RefreshCw, Navigation, CloudRain, Wind, Droplets, Thermometer, Eye } from 'lucide-react';
-import demoLocations from '../data/demoLocations.json';
-import { KpiPopover } from '../components/dashboard/KpiPopover';
+import {
+  useCallback,
+  useEffect,
+  useState,
+} from "react";
 
-const iconMap = {
-  truck: Truck, clock: Clock, 'alert-triangle': AlertTriangle, activity: Activity, bell: Bell
+import {
+  Activity,
+  ArrowRight,
+  CloudRain,
+  Compass,
+  MapPin,
+  Mountain,
+  RefreshCw,
+  ShieldCheck,
+  TriangleAlert,
+} from "lucide-react";
+
+import {
+  Link,
+} from "react-router-dom";
+
+import toast from "react-hot-toast";
+
+import {
+  getClimateSummary,
+} from "../services/api";
+
+import ClimateMap from "../components/map/ClimateMap";
+
+const DEFAULT_LOCATION = [
+  26.1445,
+  91.7362,
+];
+
+const DEMO_FALLBACK = {
+  climateRiskScore: 48,
+  climateRiskCategory:
+    "Moderate",
+  resilienceScore: 67,
+  resilienceLabel:
+    "Resilient",
+  accessibilityScore: 52,
+  hazardPriority:
+    "MEDIUM",
+  weather: {
+    rainfall: 7.8,
+    source: "demo",
+  },
+  terrain: {
+    elevation: 210,
+    slope: 8.4,
+  },
+  location: {
+    latitude:
+      DEFAULT_LOCATION[0],
+    longitude:
+      DEFAULT_LOCATION[1],
+  },
 };
 
-// ---------------------------------------------------------------------------
-// WMO weather code → label
-// ---------------------------------------------------------------------------
-const WMO_LABEL = {
-  0:'Clear sky',1:'Mainly clear',2:'Partly cloudy',3:'Overcast',
-  45:'Foggy',48:'Rime fog',
-  51:'Light drizzle',53:'Drizzle',55:'Heavy drizzle',
-  61:'Light rain',63:'Rain',65:'Heavy rain',
-  71:'Light snow',73:'Snow',75:'Heavy snow',
-  80:'Light showers',81:'Showers',82:'Heavy showers',
-  95:'Thunderstorm',96:'Thunderstorm w/ hail',99:'Heavy thunderstorm',
-};
+function scoreClass(
+  score
+) {
+  if (score >= 75)
+    return "good";
 
-// ---------------------------------------------------------------------------
-// WeatherWidget — live card with hover dropdown
-// ---------------------------------------------------------------------------
-const WeatherWidget = ({ coords }) => {
-  const [wx, setWx]           = useState(null);
-  const [loading, setLoading] = useState(true);
-  const [open, setOpen]       = useState(false);
-  const ref                   = useRef(null);
+  if (score >= 45)
+    return "medium";
 
-  const lat = coords?.lat ?? 26.1445;
-  const lon = coords?.lon ?? 91.7362;
+  return "danger";
+}
 
-  useEffect(() => {
-    setLoading(true);
-    const url =
-      `https://api.open-meteo.com/v1/forecast` +
-      `?latitude=${lat}&longitude=${lon}` +
-      `&current=temperature_2m,relative_humidity_2m,precipitation,weathercode,windspeed_10m,uv_index,apparent_temperature` +
-      `&hourly=precipitation_probability` +
-      `&forecast_days=1` +
-      `&timezone=Asia%2FKolkata`;
-    fetch(url)
-      .then(r => r.json())
-      .then(data => {
-        const c = data.current;
-        const rainProb = Math.max(...(data.hourly?.precipitation_probability?.slice(0, 6) ?? [0]));
-        setWx({
-          temp:       Math.round(c.temperature_2m),
-          feelsLike:  Math.round(c.apparent_temperature),
-          humidity:   c.relative_humidity_2m,
-          rainfall:   c.precipitation,
-          rainChance: rainProb,
-          wind:       Math.round(c.windspeed_10m),
-          uv:         c.uv_index,
-          label:      WMO_LABEL[c.weathercode] ?? 'Unknown',
-        });
-        setLoading(false);
-      })
-      .catch(() => setLoading(false));
-  }, [lat, lon]);
+function formatCoordinate(
+  value
+) {
+  return Number(value).toFixed(4);
+}
 
-  // Close on outside click
-  useEffect(() => {
-    const h = e => { if (ref.current && !ref.current.contains(e.target)) setOpen(false); };
-    document.addEventListener('mousedown', h);
-    return () => document.removeEventListener('mousedown', h);
-  }, []);
-
-  const uvColor   = !wx ? '#888' : wx.uv <= 2 ? '#22c55e' : wx.uv <= 5 ? '#f59e0b' : wx.uv <= 7 ? '#f97316' : '#ef4444';
-  const rainColor = !wx ? '#888' : wx.rainChance < 30 ? '#22c55e' : wx.rainChance < 60 ? '#f59e0b' : '#3b82f6';
-
-  return (
-    <div ref={ref} style={{ position: 'relative', width: '100%' }}>
-      {/* Collapsed card — click to toggle */}
-      <div
-        className="card"
-        onClick={() => wx && setOpen(o => !o)}
-        style={{
-          cursor: wx ? 'pointer' : 'default',
-          padding: '14px 16px',
-          display: 'flex',
-          alignItems: 'center',
-          gap: 14,
-          userSelect: 'none',
-          borderBottom: open ? '1.5px solid #D6EAF9' : undefined,
-          borderBottomLeftRadius: open ? 0 : undefined,
-          borderBottomRightRadius: open ? 0 : undefined,
-        }}
-      >
-        {/* Icon */}
-        <div style={{
-          width: 42, height: 42, borderRadius: 10, flexShrink: 0,
-          background: 'linear-gradient(135deg,#1E6FA8,#2C8FD1)',
-          display: 'flex', alignItems: 'center', justifyContent: 'center',
-        }}>
-          <Thermometer size={20} color="#fff" />
-        </div>
-
-        {/* Text */}
-        <div style={{ flex: 1, minWidth: 0 }}>
-          <div style={{ display: 'flex', alignItems: 'baseline', gap: 8 }}>
-            <span style={{ fontSize: '1.45rem', fontWeight: 700, color: '#14263B', lineHeight: 1 }}>
-              {loading ? '—' : wx ? `${wx.temp}°C` : '—'}
-            </span>
-            {wx && (
-              <span style={{ fontSize: '0.75rem', color: '#5C7288' }}>Feels {wx.feelsLike}°C</span>
-            )}
-          </div>
-          <div style={{ fontSize: '0.78rem', color: '#5C7288', marginTop: 2, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
-            {loading ? 'Loading weather…' : wx ? wx.label : 'Unavailable'}
-          </div>
-        </div>
-
-        {/* Rain badge + chevron */}
-        {wx && (
-          <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexShrink: 0 }}>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 4, background: '#EAF4FC', borderRadius: 6, padding: '3px 8px' }}>
-              <CloudRain size={12} color={rainColor} />
-              <span style={{ fontSize: '0.75rem', fontWeight: 700, color: rainColor }}>{wx.rainChance}%</span>
-            </div>
-            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#94A6B8" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"
-              style={{ transform: open ? 'rotate(180deg)' : 'rotate(0)', transition: 'transform .2s' }}>
-              <polyline points="6 9 12 15 18 9" />
-            </svg>
-          </div>
-        )}
-      </div>
-
-      {/* Expanded detail panel */}
-      {open && wx && (
-        <div style={{
-          background: '#fff',
-          border: '1.5px solid #D6EAF9',
-          borderTop: 'none',
-          borderBottomLeftRadius: 12,
-          borderBottomRightRadius: 12,
-          padding: '12px 16px 14px',
-          animation: 'fadeInDown .15s ease',
-        }}>
-          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '10px 0' }}>
-            {[
-              { icon: <Droplets size={13} color="#2C8FD1" />, label: 'Humidity',    value: `${wx.humidity}%`,    color: '#14263B' },
-              { icon: <Wind     size={13} color="#64748b" />, label: 'Wind',        value: `${wx.wind} km/h`,    color: '#14263B' },
-              { icon: <Eye      size={13} color={uvColor}  />, label: 'UV Index',  value: `${wx.uv}`,            color: uvColor   },
-              { icon: <CloudRain size={13} color={rainColor} />, label: 'Rain Chance', value: `${wx.rainChance}%`, color: rainColor },
-              { icon: <Droplets size={13} color="#3b82f6"  />, label: 'Rainfall',  value: `${wx.rainfall} mm`,  color: '#14263B' },
-              { icon: <Thermometer size={13} color="#f97316" />, label: 'Feels Like', value: `${wx.feelsLike}°C`, color: '#14263B' },
-            ].map(({ icon, label, value, color }) => (
-              <div key={label} style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 3 }}>
-                {icon}
-                <div style={{ fontSize: '0.62rem', color: '#94A6B8', textAlign: 'center' }}>{label}</div>
-                <div style={{ fontSize: '0.82rem', fontWeight: 700, color }}>{value}</div>
-              </div>
-            ))}
-          </div>
-          {wx.rainChance > 50 && (
-            <div style={{ marginTop: 10, padding: '5px 10px', background: '#FEF2F2', borderRadius: 6,
-              fontSize: '0.72rem', color: '#ef4444', fontWeight: 700, display: 'flex', alignItems: 'center', gap: 5 }}>
-              <CloudRain size={11} /> Rain likely today
-            </div>
-          )}
-        </div>
-      )}
-    </div>
+export function Dashboard() {
+  const [
+    selectedLocation,
+    setSelectedLocation,
+  ] = useState(
+    DEFAULT_LOCATION
   );
-};
 
-// ---------------------------------------------------------------------------
-// Risk category → CSS token
-// ---------------------------------------------------------------------------
-const RISK_COLOR = {
-  'Very Low': 'var(--success)',
-  'Low':      'var(--success)',
-  'Moderate': 'var(--warning)',
-  'High':     'var(--danger)',
-  'Very High':'var(--danger)',
-};
+  const [
+    summary,
+    setSummary,
+  ] = useState(null);
 
-// ---------------------------------------------------------------------------
-// Real demo locations — selected by the model from landslide_points.csv
-// (generated by risk-engine/scripts/generate_demo_locations.py)
-// ---------------------------------------------------------------------------
-const DEMO_LOCATIONS = demoLocations.map(loc => ({
-  label: `${loc.name} (${loc.riskCategory})`,
-  lat: loc.lat,
-  lon: loc.lon,
-  riskCategory: loc.riskCategory,
-  type: loc.type,
-}));
+  const [
+    loading,
+    setLoading,
+  ] = useState(false);
 
-// Show at most 2 buttons (1 risky + 1 safe) to keep the banner compact
-const BANNER_DEMOS = [
-  DEMO_LOCATIONS.find(d => d.type === 'risky'),
-  DEMO_LOCATIONS.find(d => d.type === 'safe'),
-].filter(Boolean);
+  const [
+    demoMode,
+    setDemoMode,
+  ] = useState(false);
 
-// ---------------------------------------------------------------------------
-// Location banner — appears above KPIs
-// ---------------------------------------------------------------------------
-const LocationBanner = ({ status, risk, requestLocation, setManualCoords }) => {
-  const [dismissed, setDismissed] = useState(false);
+  const loadSummary =
+    useCallback(
+      async (
+        location =
+          selectedLocation
+      ) => {
+        setLoading(true);
 
-  if (dismissed) return null;
-  if (status === 'idle' || status === 'unsupported') {
-    // Still show demo buttons even when idle
-    return (
-      <div className="location-banner location-banner-denied" style={{ flexWrap: 'wrap', gap: '8px' }}>
-        <MapPin size={14} />
-        <span style={{ flex: 1 }}>Try a demo location inside the model's coverage area:</span>
-        <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap' }}>
-          {BANNER_DEMOS.map(loc => (
-            <button
-              key={loc.label}
-              className="btn btn-secondary"
-              onClick={() => setManualCoords(loc.lat, loc.lon)}
-              style={{ padding: '3px 10px', fontSize: '0.75rem' }}
-            >
-              📍 {loc.label}
-            </button>
-          ))}
-        </div>
-      </div>
+        try {
+          const data =
+            await getClimateSummary(
+              location[0],
+              location[1]
+            );
+
+          setSummary(data);
+          setDemoMode(false);
+        } catch (error) {
+          console.error(error);
+
+          setSummary(
+            DEMO_FALLBACK
+          );
+
+          setDemoMode(true);
+
+          toast.error(
+            "Climate engine unavailable. Showing demo data."
+          );
+        } finally {
+          setLoading(false);
+        }
+      },
+      [selectedLocation]
     );
-  }
 
-  if (status === 'requesting') {
-    return (
-      <div className="location-banner location-banner-loading">
-        <MapPin size={14} />
-        <span>Detecting your location and checking risk…</span>
-        <div className="skeleton" style={{ width: 120, height: 14, borderRadius: 4 }} />
-      </div>
-    );
-  }
-
-  if (status === 'denied') {
-    return (
-      <div className="location-banner location-banner-denied" style={{ flexWrap: 'wrap', gap: '8px' }}>
-        <MapPin size={14} />
-        <span>Location access denied.</span>
-        <button className="btn btn-secondary" onClick={requestLocation} style={{ padding: '3px 10px', fontSize: '0.75rem', display: 'flex', alignItems: 'center', gap: '4px' }}>
-          <RefreshCw size={12} /> Retry
-        </button>
-        <span style={{ color: 'var(--text-secondary)', fontSize: '0.8rem' }}>Or try a demo location:</span>
-        {BANNER_DEMOS.map(loc => (
-          <button
-            key={loc.label}
-            className="btn btn-secondary"
-            onClick={() => setManualCoords(loc.lat, loc.lon)}
-            style={{ padding: '3px 10px', fontSize: '0.75rem' }}
-          >
-            📍 {loc.label}
-          </button>
-        ))}
-        <button onClick={() => setDismissed(true)} style={{ background: 'none', border: 'none', color: 'var(--text-secondary)', cursor: 'pointer', padding: '2px 4px', marginLeft: 'auto' }}>✕</button>
-      </div>
-    );
-  }
-
-  // Fix #1 — outside_coverage gets its own clear message (never stuck on "Checking…")
-  if (status === 'granted_no_coverage') {
-    return (
-      <div className="location-banner location-banner-denied" style={{ flexWrap: 'wrap', gap: '8px' }}>
-        <MapPin size={14} />
-        <span>
-          <strong>Your location is outside the model's coverage area</strong> (North-Eastern India,
-          ~Dima Hasao district). The risk engine cannot predict there.
-        </span>
-        <span style={{ fontSize: '0.8rem', color: 'var(--text-secondary)' }}>Try a demo instead:</span>
-        {BANNER_DEMOS.map(loc => (
-          <button
-            key={loc.label}
-            className="btn btn-secondary"
-            onClick={() => setManualCoords(loc.lat, loc.lon)}
-            style={{ padding: '3px 10px', fontSize: '0.75rem' }}
-          >
-            📍 {loc.label}
-          </button>
-        ))}
-        <button onClick={() => setDismissed(true)} style={{ background: 'none', border: 'none', color: 'var(--text-secondary)', cursor: 'pointer', padding: '2px 4px', marginLeft: 'auto' }}>✕</button>
-      </div>
-    );
-  }
-
-  if (status === 'risk_error') {
-    return (
-      <div className="location-banner location-banner-denied">
-        <MapPin size={14} />
-        <span>Location found, but risk check failed — is the risk-engine running?</span>
-        <button onClick={() => setDismissed(true)} style={{ background: 'none', border: 'none', color: 'var(--text-secondary)', cursor: 'pointer', padding: '2px 4px', marginLeft: 'auto' }}>✕</button>
-      </div>
-    );
-  }
-
-  if (status === 'granted') {
-    const cat = risk?.risk_category ?? 'Checking…';
-    const pct = risk?.risk_percentage;
-    const color = RISK_COLOR[cat] ?? 'var(--text-secondary)';
-    return (
-      <div className="location-banner location-banner-granted" style={{ borderColor: color, flexWrap: 'wrap', gap: '8px' }}>
-        <MapPin size={14} color={color} />
-        <span>Your current location: </span>
-        <span style={{ fontWeight: 700, color }}>{cat}</span>
-        {pct != null && <span style={{ color: 'var(--text-secondary)', fontSize: '0.8rem' }}>({pct.toFixed(1)}%)</span>}
-        <span style={{ marginLeft: 'auto', fontSize: '0.75rem', color: 'var(--text-secondary)' }}>
-          Or try:{' '}
-          {BANNER_DEMOS.map(loc => (
-            <button
-              key={loc.label}
-              onClick={() => setManualCoords(loc.lat, loc.lon)}
-              style={{ background: 'none', border: 'none', color: 'var(--accent)', cursor: 'pointer', fontSize: '0.75rem', padding: '0 4px' }}
-            >
-              {loc.label.split('(')[0].trim()}
-            </button>
-          ))}
-        </span>
-        <button onClick={() => setDismissed(true)} style={{ background: 'none', border: 'none', color: 'var(--text-secondary)', cursor: 'pointer', padding: '2px 4px' }}>✕</button>
-      </div>
-    );
-  }
-
-  return null;
-};
-
-// ---------------------------------------------------------------------------
-// Dashboard page
-// ---------------------------------------------------------------------------
-export const Dashboard = () => {
-  const { coords, risk, status, requestLocation, setManualCoords } = useUserLocation();
-  const [liveAlerts, setLiveAlerts] = useState([]);
-  const [liveDeliveries, setLiveDeliveries] = useState([]);
-
-  // Trigger location request on mount
-  useEffect(() => { requestLocation(); }, []);
-
-  // Load live alerts (60s polling) — all roles see alerts, auth header sent via alertsAPI
   useEffect(() => {
-    alertsAPI.getAll().then(setLiveAlerts).catch(() => {});
-    const id = setInterval(() => {
-      alertsAPI.getAll().then(setLiveAlerts).catch(() => {});
-    }, 60000);
-    return () => clearInterval(id);
+    loadSummary(
+      selectedLocation
+    );
   }, []);
 
-  // Load live deliveries (60s polling)
-  useEffect(() => {
-    deliveriesAPI.getAll().then(setLiveDeliveries).catch(() => {});
-    const id = setInterval(() => {
-      deliveriesAPI.getAll().then(setLiveDeliveries).catch(() => {});
-    }, 60000);
-    return () => clearInterval(id);
-  }, []);
+  const handleMapSelect =
+    async (location) => {
+      setSelectedLocation(
+        location
+      );
 
-  // Build KPI strip with real alert and delivery counts
-  const kpiList = dashboardKPIs.map(kpi => {
-    if (kpi.icon === 'bell') {
-      return { ...kpi, value: String(liveAlerts.length), label: 'Risk Alerts (Real-time)' };
-    }
-    if (kpi.icon === 'truck' || kpi.label?.toLowerCase().includes('deliver') || kpi.label?.toLowerCase().includes('vehicle')) {
-      return {
-        ...kpi,
-        label: 'Active Deliveries',
-        value: String(liveDeliveries.length || 0),
-        change: liveDeliveries.length > 0 ? `${liveDeliveries.filter(d => d.status === 'IN TRANSIT' || d.status === 'ACTIVE').length} In Transit` : kpi.change,
-      };
-    }
-    return kpi;
-  });
+      await loadSummary(
+        location
+      );
+    };
 
-  const sideAlerts = liveAlerts.length > 0
-    ? liveAlerts.slice(0, 4).map(a => ({
-        id: a._id,
-        level: (a.severity === 'CRITICAL' || a.severity === 'HIGH') ? 'CRITICAL' : 'WARNING',
-        message: a.message,
-        time: a.timestamp ? new Date(a.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : '',
-      }))
-    : [];
+  const data =
+    summary ||
+    DEMO_FALLBACK;
 
-  // Default to Dima Hasao (NER hub) on dashboard map; user GPS is kept in Route Planner per user specification
-  const mapCoords = null;
+  const risk =
+    Number(
+      data.climateRiskScore ??
+        0
+    );
 
-  // ── Popover item builders ────────────────────────────────────────────────
-  const SEVERITY_BADGE_COLOR = { CRITICAL: 'var(--danger)', WARNING: 'var(--warning)', INFO: 'var(--success)' };
-  const ROAD_BADGE_COLOR     = { BLOCKED: 'var(--danger)', 'HIGH RISK': 'var(--danger)', CAUTION: 'var(--warning)', OPEN: 'var(--success)' };
-  const STATUS_COLOR         = { 'IN TRANSIT': 'var(--success)', DELAYED: 'var(--warning)', 'RE-ROUTING': 'var(--danger)' };
+  const resilience =
+    Number(
+      data.resilienceScore ??
+        0
+    );
 
-  const kpiPopovers = {
-    'Active Deliveries': {
-      href: '/deliveries',
-      items: (liveDeliveries.length > 0 ? liveDeliveries : vehicles).map(d => ({
-        primary: d.id || d.deliveryId || d.vehicle,
-        secondary: `${d.cargo || 'Cargo'} → ${d.destination || 'Destination'}`,
-        badge: d.status || 'IN TRANSIT',
-        badgeColor: STATUS_COLOR[d.status] || 'var(--success)',
-      })),
-    },
-    'Active Vehicles': {
-      href: '/deliveries',
-      items: (liveDeliveries.length > 0 ? liveDeliveries : vehicles).map(d => ({
-        primary: d.id || d.deliveryId || d.vehicle,
-        secondary: `${d.cargo || 'Cargo'} → ${d.destination || 'Destination'}`,
-        badge: d.status || 'IN TRANSIT',
-        badgeColor: STATUS_COLOR[d.status] || 'var(--success)',
-      })),
-    },
-    'Vehicles Delayed': {
-      href: '/vehicles',
-      items: vehicles.filter(v => v.status === 'DELAYED' || v.status === 'RE-ROUTING').map(v => {
-        const isVan104 = v.id === 'VAN-104';
-        const secText = isVan104
-          ? '→ Imphal Hospital · ETA: 4h 10m (+45m Detour Delay) · Landslide Detour'
-          : `→ ${v.destination} · ETA ${v.eta}${v.delayReason ? ` · ${v.delayReason}` : ''}`;
-        const badgeText = isVan104 ? 'DELAYED (+45m Detour)' : (v.delayMinutes ? `+${v.delayMinutes}m DELAY` : v.status);
-        return {
-          primary: `${v.id} (${v.cargo})`,
-          secondary: secText,
-          badge: badgeText,
-          badgeColor: 'var(--warning)',
-        };
-      }),
-    },
-    'Blocked Roads': {
-      href: '/roads',
-      items: roads.filter(r => r.status !== 'OPEN').map(r => ({
-        primary: `${r.id} — ${r.name}`,
-        secondary: r.reason ?? `Risk score ${r.riskScore}/100`,
-        badge: r.status,
-        badgeColor: ROAD_BADGE_COLOR[r.status],
-      })),
-    },
-    'Active Incidents': {
-      href: '/incidents',
-      items: [...incidents]
-        .sort((a, b) => ({ CRITICAL: 0, WARNING: 1, INFO: 2 }[a.severity] ?? 9) - ({ CRITICAL: 0, WARNING: 1, INFO: 2 }[b.severity] ?? 9))
-        .filter(i => i.status === 'ACTIVE' || i.status === 'MONITORING')
-        .map(i => ({
-          primary: `${i.type} — ${i.location}`,
-          secondary: `Reported ${i.time}`,
-          badge: i.severity,
-          badgeColor: SEVERITY_BADGE_COLOR[i.severity],
-        })),
-    },
-  };
+  const accessibility =
+    Number(
+      data.accessibilityScore ??
+        0
+    );
 
   return (
-    <div className="dashboard-grid" style={{ alignItems: 'start' }}>
-      {/* Location banner */}
-      <div style={{ gridColumn: 'span 12' }}>
-        <LocationBanner
-          status={status}
-          risk={risk}
-          requestLocation={requestLocation}
-          setManualCoords={setManualCoords}
-        />
-      </div>
+    <div className="page">
+      <section className="hero-section">
+        <div>
+          <span className="eyebrow">
+            SANKALP · CLIMATE EDITION
+          </span>
 
-      {/* KPIs — with hover popovers on the 4 relevant cards */}
-      <div className="kpi-row">
-        {kpiList.map((kpi, idx) => {
-          const Icon = iconMap[kpi.icon];
-          const popoverConfig = kpiPopovers[kpi.label];
-          const card = (
-            <div className="card kpi-card">
-              <div className={`kpi-icon ${kpi.status}`}>
-                <Icon size={24} />
-              </div>
-              <div>
-                <div style={{ fontSize: '1.5rem', fontWeight: 700 }}>{kpi.value}</div>
-                <div style={{ fontSize: '0.85rem', color: 'var(--text-secondary)' }}>{kpi.label}</div>
-              </div>
-            </div>
-          );
-          return (
-            <KpiPopover
-              key={idx}
-              items={popoverConfig?.items ?? []}
-              viewAllHref={popoverConfig?.href}
-              disabled={!popoverConfig}
-            >
-              {card}
-            </KpiPopover>
-          );
-        })}
-      </div>
+          <h1>
+            Climate Intelligence
+            <br />
+            for Resilient Regions
+          </h1>
 
-      {/* Main Map Area */}
-      <div className="card map-section" style={{ position: 'relative', padding: 0, overflow: 'hidden' }}>
-        <MapPanel userCoords={mapCoords} />
-
-        {/* Road Risk Legend */}
-        <div className="map-legend">
-          <h4>Road Risk Level</h4>
-          <div className="map-legend-item">
-            <div className="map-legend-line" style={{ background: '#ef4444' }} />
-            <span>High Risk</span>
-          </div>
-          <div className="map-legend-item">
-            <div className="map-legend-line" style={{ background: '#f59e0b' }} />
-            <span>Caution</span>
-          </div>
-          <div className="map-legend-item">
-            <div className="map-legend-line" style={{ background: '#22c55e' }} />
-            <span>Clear</span>
-          </div>
+          <p>
+            An AI-powered decision
+            support platform that
+            connects climate hazards,
+            terrain and mobility risk
+            to help identify safer,
+            more resilient routes and
+            infrastructure decisions.
+          </p>
         </div>
 
-        {/* "Plan a Route" CTA — top-right corner of the map */}
-        <div style={{ position: 'absolute', top: '12px', right: '12px', zIndex: 1000 }}>
+        <div className="hero-actions">
           <Link
             to="/route-planner"
-            style={{
-              display: 'flex', alignItems: 'center', gap: '8px',
-              padding: '8px 14px',
-              background: 'var(--white)',
-              border: '1.5px solid var(--sky)',
-              borderRadius: '8px',
-              color: 'var(--sky-dark)',
-              fontWeight: 700, fontSize: '0.85rem',
-              textDecoration: 'none',
-              boxShadow: '0 2px 10px rgba(44,143,209,0.2)',
-              transition: 'background 0.15s, box-shadow 0.15s',
-            }}
-            onMouseEnter={e => { e.currentTarget.style.background = 'var(--sky-tint)'; }}
-            onMouseLeave={e => { e.currentTarget.style.background = 'var(--white)'; }}
+            className="button button-primary"
           >
-            <Navigation size={15} color="var(--sky)" />
-            Plan a Route →
+            Plan resilient route
+            <ArrowRight size={17} />
+          </Link>
+
+          <Link
+            to="/scenario"
+            className="button button-secondary"
+          >
+            Run climate scenario
           </Link>
         </div>
+      </section>
 
-        {/* Map legend */}
-        <div className="map-legend" style={{ zIndex: 1000, position: 'absolute', bottom: '16px', left: '16px', background: 'var(--surface-elevated)', border: 'none' }}>
-          <div style={{ fontWeight: 600, marginBottom: '8px' }}>Live Trackers</div>
-          <div style={{ display: 'flex', gap: '8px', alignItems: 'center', marginBottom: '4px' }}>
-            <span style={{ width: 10, height: 10, borderRadius: '50%', backgroundColor: 'var(--accent)', border: '2px solid #fff' }}></span> Active Vehicle
-          </div>
-          <div style={{ display: 'flex', gap: '8px', alignItems: 'center', marginBottom: '4px' }}>
-            <span style={{ width: 10, height: 10, borderRadius: '50%', backgroundColor: 'var(--danger)', border: '2px solid #fff' }}></span> Critical Incident
-          </div>
-          <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
-            <span style={{ width: 10, height: 10, borderRadius: '50%', backgroundColor: '#3b82f6', border: '2px solid #fff', boxShadow: '0 0 6px #3b82f6' }}></span> Your Location
-          </div>
+      <section className="status-strip">
+        <div>
+          <span className="status-dot" />
+          Climate intelligence engine
+          active
         </div>
-      </div>
 
-      {/* Side Panels */}
-      <div className="side-panel">
-        {/* Weather Widget — above Risk Alerts */}
-        <WeatherWidget coords={coords} />
+        <div>
+          Analysis point:
+          {" "}
+          {formatCoordinate(
+            selectedLocation[0]
+          )}
+          ,
+          {" "}
+          {formatCoordinate(
+            selectedLocation[1]
+          )}
+        </div>
 
-        <div className="card">
-          <div className="card-header">
-            <div className="card-title">
-              {liveAlerts.length > 0 ? `Live Risk Alerts (${liveAlerts.length})` : 'Risk Alerts'}
+        {demoMode && (
+          <div className="demo-indicator">
+            Demo fallback
+          </div>
+        )}
+      </section>
+
+      <section className="kpi-grid">
+        <MetricCard
+          icon={
+            <TriangleAlert
+              size={20}
+            />
+          }
+          label="Climate Risk"
+          value={`${Math.round(
+            risk
+          )}`}
+          suffix="/100"
+          caption={
+            data.climateRiskCategory ||
+            "Unknown"
+          }
+          className={scoreClass(
+            100 - risk
+          )}
+        />
+
+        <MetricCard
+          icon={
+            <ShieldCheck
+              size={20}
+            />
+          }
+          label="Resilience"
+          value={`${Math.round(
+            resilience
+          )}`}
+          suffix="/100"
+          caption={
+            data.resilienceLabel ||
+            "Unknown"
+          }
+          className={scoreClass(
+            resilience
+          )}
+        />
+
+        <MetricCard
+          icon={
+            <Compass size={20} />
+          }
+          label="Accessibility"
+          value={`${Math.round(
+            accessibility
+          )}`}
+          suffix="%"
+          caption="Climate-aware access"
+          className={scoreClass(
+            accessibility
+          )}
+        />
+
+        <MetricCard
+          icon={
+            <CloudRain
+              size={20}
+            />
+          }
+          label="Rainfall"
+          value={
+            data.weather
+              ?.rainfall != null
+              ? Number(
+                  data.weather
+                    .rainfall
+                ).toFixed(1)
+              : "—"
+          }
+          suffix=" mm"
+          caption="Current model input"
+          className="neutral"
+        />
+      </section>
+
+      <section className="content-grid dashboard-grid">
+        <div className="panel map-panel-large">
+          <div className="panel-header">
+            <div>
+              <span className="panel-kicker">
+                LIVE ANALYSIS
+              </span>
+
+              <h2>
+                Climate Risk Map
+              </h2>
+
+              <p>
+                Click a location to
+                run the existing ML
+                hazard analysis.
+              </p>
+            </div>
+
+            <button
+              className="icon-button"
+              onClick={() =>
+                loadSummary()
+              }
+              disabled={loading}
+              title="Refresh analysis"
+            >
+              <RefreshCw
+                size={18}
+                className={
+                  loading
+                    ? "spin"
+                    : ""
+                }
+              />
+            </button>
+          </div>
+
+          <ClimateMap
+            center={
+              selectedLocation
+            }
+            selectedLocation={
+              selectedLocation
+            }
+            riskData={{
+              climateRisk: {
+                percentage:
+                  risk,
+                category:
+                  data.climateRiskCategory,
+              },
+              resilience: {
+                score:
+                  resilience,
+              },
+            }}
+            onSelectLocation={
+              handleMapSelect
+            }
+            height={570}
+          />
+        </div>
+
+        <div className="side-stack">
+          <div className="panel">
+            <div className="panel-header compact">
+              <div>
+                <span className="panel-kicker">
+                  HAZARD PROFILE
+                </span>
+
+                <h2>
+                  Location intelligence
+                </h2>
+              </div>
+            </div>
+
+            <div className="profile-list">
+              <ProfileRow
+                icon={
+                  <Mountain
+                    size={17}
+                  />
+                }
+                label="Elevation"
+                value={
+                  data.terrain
+                    ?.elevation !=
+                  null
+                    ? `${Number(
+                        data
+                          .terrain
+                          .elevation
+                      ).toFixed(
+                        0
+                      )} m`
+                    : "—"
+                }
+              />
+
+              <ProfileRow
+                icon={
+                  <Activity
+                    size={17}
+                  />
+                }
+                label="Slope"
+                value={
+                  data.terrain
+                    ?.slope !=
+                  null
+                    ? `${Number(
+                        data.terrain
+                          .slope
+                      ).toFixed(
+                        1
+                      )}°`
+                    : "—"
+                }
+              />
+
+              <ProfileRow
+                icon={
+                  <CloudRain
+                    size={17}
+                  />
+                }
+                label="Rainfall"
+                value={
+                  data.weather
+                    ?.rainfall !=
+                  null
+                    ? `${Number(
+                        data
+                          .weather
+                          .rainfall
+                      ).toFixed(
+                        1
+                      )} mm`
+                    : "—"
+                }
+              />
+
+              <ProfileRow
+                icon={
+                  <MapPin
+                    size={17}
+                  />
+                }
+                label="Hazard priority"
+                value={
+                  data.hazardPriority ||
+                  "UNKNOWN"
+                }
+                danger={
+                  data.hazardPriority ===
+                  "HIGH"
+                }
+              />
             </div>
           </div>
-          <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
-            {sideAlerts.length > 0 ? sideAlerts.map(alert => (
-              <div key={alert.id} style={{
-                padding: '10px 12px',
-                borderLeft: `3px solid ${alert.level === 'CRITICAL' ? 'var(--danger)' : 'var(--warning)'}`,
-                background: 'var(--white)',
-                border: '1px solid var(--line)',
-                borderLeft: `3px solid ${alert.level === 'CRITICAL' ? 'var(--danger)' : 'var(--warning)'}`,
-                borderRadius: '6px',
-              }}>
-                <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '4px' }}>
-                  <span style={{ fontSize: '0.72rem', fontWeight: 700, color: alert.level === 'CRITICAL' ? 'var(--danger)' : 'var(--warning)' }}>{alert.level}</span>
-                  <span style={{ fontSize: '0.72rem', color: 'var(--slate)' }}>{alert.time}</span>
-                </div>
-                <div style={{ fontSize: '0.82rem', lineHeight: '1.4', color: 'var(--ink)' }}>{alert.message}</div>
-              </div>
-            )) : (
-              <div style={{ color: 'var(--slate)', fontSize: '0.85rem', textAlign: 'center', padding: '16px 0' }}>
-                No alerts yet. Click the map in coverage area to check risk.
-              </div>
-            )}
-          </div>
-        </div>
 
-        <div className="card" style={{ flex: 1 }}>
-          <div className="card-header">
-            <div className="card-title">Active Deliveries Summary</div>
-          </div>
-          <div className="table-container">
-            <table>
-              <tbody>
-                {(liveDeliveries.length > 0 ? liveDeliveries : vehicles).slice(0, 3).map(v => (
-                  <tr key={v.id}>
-                    <td>
-                      <div style={{ fontWeight: 500 }}>{v.id} {v.vehicle ? `(${v.vehicle})` : ''}</div>
-                      <div style={{ fontSize: '0.75rem', color: 'var(--text-secondary)' }}>{v.cargo} → {v.destination}</div>
-                    </td>
-                    <td style={{ textAlign: 'right' }}>
-                      {v.status === 'DELAYED' ? (
-                        <span style={{
-                          display: 'inline-flex',
-                          alignItems: 'center',
-                          gap: 4,
-                          padding: '2px 7px',
-                          borderRadius: 6,
-                          background: 'rgba(245, 158, 11, 0.15)',
-                          color: '#b45309',
-                          border: '1px solid rgba(245, 158, 11, 0.4)',
-                          fontWeight: 700,
-                          fontSize: '0.72rem',
-                          whiteSpace: 'nowrap',
-                        }}>
-                          {v.id === 'VAN-104' || v.id === 'DEL-1043' ? 'DELAYED (+45m Detour)' : `DELAYED ${v.delayMinutes ? `(+${v.delayMinutes}m)` : ''}`}
-                        </span>
-                      ) : (
-                        <Badge>{v.status || 'IN TRANSIT'}</Badge>
-                      )}
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
+          <div className="panel insight-panel">
+            <span className="panel-kicker">
+              AI DECISION SUPPORT
+            </span>
+
+            <h2>
+              What does the score mean?
+            </h2>
+
+            <p>
+              The platform combines
+              the existing ML hazard
+              prediction with terrain,
+              rainfall and road
+              proximity to produce
+              decision-support scores.
+            </p>
+
+            <div className="insight-line">
+              <span>
+                ML hazard
+              </span>
+
+              <strong>
+                {data.climateRiskCategory ||
+                  "—"}
+              </strong>
+            </div>
+
+            <div className="insight-line">
+              <span>
+                Resilience
+              </span>
+
+              <strong>
+                {Math.round(
+                  resilience
+                )}
+                /100
+              </strong>
+            </div>
+
+            <Link
+              to="/scenario"
+              className="text-link"
+            >
+              Test a climate scenario
+              <ArrowRight size={15} />
+            </Link>
           </div>
         </div>
-      </div>
+      </section>
     </div>
   );
-};
+}
+
+function MetricCard({
+  icon,
+  label,
+  value,
+  suffix,
+  caption,
+  className,
+}) {
+  return (
+    <div
+      className={`metric-card ${className}`}
+    >
+      <div className="metric-icon">
+        {icon}
+      </div>
+
+      <span className="metric-label">
+        {label}
+      </span>
+
+      <div className="metric-value">
+        {value}
+        <small>
+          {suffix}
+        </small>
+      </div>
+
+      <span className="metric-caption">
+        {caption}
+      </span>
+    </div>
+  );
+}
+
+function ProfileRow({
+  icon,
+  label,
+  value,
+  danger,
+}) {
+  return (
+    <div className="profile-row">
+      <div className="profile-row-label">
+        {icon}
+        <span>
+          {label}
+        </span>
+      </div>
+
+      <strong
+        className={
+          danger
+            ? "danger-text"
+            : ""
+        }
+      >
+        {value}
+      </strong>
+    </div>
+  );
+}

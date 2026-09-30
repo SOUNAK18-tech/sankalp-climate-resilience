@@ -1,27 +1,53 @@
 /**
- * config.js — single source of truth for the backend URL.
+ * SANKALP frontend configuration.
  *
- * DEV  (npm run dev):  API_BASE = ''  → Vite proxy forwards /api and /uploads to localhost:1710.
- * PROD (Render/Vercel): set VITE_API_URL=https://<your-backend>.onrender.com  BEFORE building.
+ * Development:
+ *   VITE_API_URL can remain empty.
+ *   Vite proxies /api to http://localhost:1710.
  *
- * Vite bakes VITE_* variables into the JS at BUILD time, so after adding or changing
- * VITE_API_URL you must trigger a fresh build/deploy of the frontend.
+ * Production:
+ *   Set:
+ *
+ *   VITE_API_URL=https://your-backend.onrender.com
+ *
+ * before building the frontend.
  */
-const raw = (import.meta.env.VITE_API_URL || '').trim().replace(/\/+$/, '');
+
+const raw = (
+  import.meta.env.VITE_API_URL || ""
+)
+  .trim()
+  .replace(/\/+$/, "");
 
 if (import.meta.env.PROD && !raw) {
-  // Loud, obvious hint in the browser console instead of silent empty pages.
-  console.error(
-    '[config] VITE_API_URL is not set. The deployed frontend cannot reach the backend. ' +
-    'Set VITE_API_URL to your backend URL and redeploy the frontend.'
+  console.warn(
+    "[SANKALP] VITE_API_URL is not configured. " +
+      "The production frontend may not reach the Express backend."
   );
 }
 
-/** Prefix for every REST call and /uploads image. '' in dev (proxy), full URL in prod. */
 export const API_BASE = raw;
 
-/** Socket.IO endpoint. Dev falls back to the local backend; prod uses VITE_API_URL only. */
-export const SOCKET_URL = raw || (import.meta.env.DEV ? 'http://localhost:1710' : '');
+export const SOCKET_URL =
+  raw ||
+  (import.meta.env.DEV
+    ? "http://localhost:1710"
+    : "");
 
-/** Turn a backend-relative file path ("/uploads/x.jpg") into a loadable URL. Leaves absolute/data URLs alone. */
-export const assetUrl = (u) => (u && u.startsWith('/uploads') ? `${API_BASE}${u}` : u);
+export const assetUrl = (url) => {
+  if (!url) return url;
+
+  if (
+    url.startsWith("http://") ||
+    url.startsWith("https://") ||
+    url.startsWith("data:")
+  ) {
+    return url;
+  }
+
+  if (url.startsWith("/uploads")) {
+    return `${API_BASE}${url}`;
+  }
+
+  return url;
+};
